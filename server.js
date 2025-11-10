@@ -1,38 +1,46 @@
- const express = require('express');
-const nodemailer = require('nodemailer');
+const express = require('express');
 const cors = require('cors');
+const { Resend } = require('resend');
 require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware
-app.use(cors());
+// ═══════════════════════════════════════
+// CONFIGURACIÓN DE MIDDLEWARE
+// ═══════════════════════════════════════
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type']
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Email de destino
-const DESTINATION_EMAIL = 'dev404.codmaster@gmail.com';
+// ═══════════════════════════════════════
+// CONFIGURACIÓN DE RESEND
+// ═══════════════════════════════════════
+// IMPORTANTE: En modo prueba, Resend SOLO permite enviar a tu email de registro
+const DESTINATION_EMAIL = 'dev404.codmaster@gmail.com'; // ← Tu email de Resend
 
-// Configurar transportador de Nodemailer
-const transporter = nodemailer.createTransport({
-  service: 'gmail',
-  auth: {
-    user: process.env.MAIL_USERNAME,
-    pass: process.env.MAIL_PASSWORD
+let resend = null;
+let emailConfigured = false;
+
+if (process.env.RESEND_API_KEY) {
+  try {
+    resend = new Resend(process.env.RESEND_API_KEY);
+    emailConfigured = true;
+    console.log('✅ Resend API Key configurada correctamente');
+  } catch (error) {
+    console.error('⚠️ Error al inicializar Resend:', error.message);
   }
-});
+} else {
+  console.error('⚠️ ADVERTENCIA: RESEND_API_KEY no está configurada');
+}
 
-// Verificar conexión al iniciar
-transporter.verify((error, success) => {
-  if (error) {
-    console.error(' Error en la configuración de email:', error);
-  } else {
-    console.log(' Servidor de email listo para enviar mensajes');
-  }
-});
-
-// Funciones auxiliares para obtener labels
+// ═══════════════════════════════════════
+// FUNCIONES AUXILIARES
+// ═══════════════════════════════════════
 const getCategoryLabel = (value) => {
   const categories = {
     'help': 'Solicitar ayuda para jóvenes en riesgo',
@@ -57,17 +65,33 @@ const getUrgencyLabel = (value) => {
   return urgencyLevels[value] || value;
 };
 
-// Endpoint principal para enviar correos
+// ═══════════════════════════════════════
+// ENDPOINT: ENVIAR CONTACTO
+// ═══════════════════════════════════════
 app.post('/api/contact', async (req, res) => {
   try {
-    // Obtener datos del formulario
+    // Validar que Resend esté configurado
+    if (!emailConfigured || !resend) {
+      console.error('❌ Resend no está configurado');
+      return res.status(503).json({
+        success: false,
+        error: 'Servicio de correo no disponible. Por favor, intenta más tarde.'
+      });
+    }
+
+    // Extraer datos del formulario
     const { name, email, company, phone, category, urgency, message } = req.body;
     
+    console.log('📥 Recibiendo solicitud de contacto:', { name, email, company, category, urgency });
+    
     // Validar campos requeridos
-    const requiredFields = ['name', 'email', 'company', 'category', 'urgency', 'message'];
-    const missingFields = requiredFields.filter(field => !req.body[field]);
+    const requiredFields = { name, email, company, category, urgency, message };
+    const missingFields = Object.entries(requiredFields)
+      .filter(([_, value]) => !value)
+      .map(([key, _]) => key);
     
     if (missingFields.length > 0) {
+      console.error('❌ Campos faltantes:', missingFields);
       return res.status(400).json({
         success: false,
         error: `Campos requeridos faltantes: ${missingFields.join(', ')}`
@@ -83,39 +107,31 @@ app.post('/api/contact', async (req, res) => {
       });
     }
 
-    // Obtener labels legibles
+    // Preparar datos
     const categoryLabel = getCategoryLabel(category);
     const urgencyLabel = getUrgencyLabel(urgency);
     const phoneText = phone || 'No proporcionado';
     
-    // Fecha y hora actual en español
     const submissionDate = new Date().toLocaleString('es-ES', {
       year: 'numeric',
       month: 'long',
       day: 'numeric',
       hour: '2-digit',
-      minute: '2-digit'
+      minute: '2-digit',
+      timeZone: 'America/Mexico_City'
     });
 
-    // Asunto del email
-    const subject = `[AURA] Consulta - ${urgencyLabel}`;
+    const subject = `[AURA] ${categoryLabel} - ${urgencyLabel}`;
 
-   // Reemplaza la sección del htmlBody en tu código (líneas ~100-280) con este nuevo diseño:
-
- // REEMPLAZA TODA la sección del htmlBody (aproximadamente líneas 100-280) con esto:
-
-const htmlBody = `
+    // HTML del email
+    const htmlBody = `
 <!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
       line-height: 1.6;
@@ -152,11 +168,7 @@ const htmlBody = `
       0%, 100% { transform: scale(1) rotate(0deg); }
       50% { transform: scale(1.1) rotate(180deg); }
     }
-    .logo-container {
-      position: relative;
-      z-index: 1;
-      margin-bottom: 25px;
-    }
+    .logo-container { position: relative; z-index: 1; margin-bottom: 25px; }
     .logo {
       width: 140px;
       height: 140px;
@@ -225,9 +237,7 @@ const htmlBody = `
       font-size: 14px;
       letter-spacing: 1px;
     }
-    .content {
-      padding: 45px 40px;
-    }
+    .content { padding: 45px 40px; }
     .section {
       margin-bottom: 40px;
       background: #f8f9fa;
@@ -253,10 +263,7 @@ const htmlBody = `
       padding-bottom: 15px;
       border-bottom: 2px solid #e0e0e0;
     }
-    .section-icon {
-      font-size: 28px;
-      margin-right: 15px;
-    }
+    .section-icon { font-size: 28px; margin-right: 15px; }
     .section-title {
       color: #2c3e50;
       font-size: 20px;
@@ -269,9 +276,7 @@ const htmlBody = `
       border-collapse: separate;
       border-spacing: 0 15px;
     }
-    .info-row {
-      display: table-row;
-    }
+    .info-row { display: table-row; }
     .info-label {
       display: table-cell;
       font-weight: 600;
@@ -424,21 +429,11 @@ const htmlBody = `
       border-top: 1px solid rgba(255, 255, 255, 0.1);
     }
     @media only screen and (max-width: 600px) {
-      .email-container {
-        margin: 0 10px;
-      }
-      .content {
-        padding: 30px 25px;
-      }
-      .section {
-        padding: 20px;
-      }
-      .header {
-        padding: 40px 25px;
-      }
-      .header-title {
-        font-size: 24px;
-      }
+      .email-container { margin: 0 10px; }
+      .content { padding: 30px 25px; }
+      .section { padding: 20px; }
+      .header { padding: 40px 25px; }
+      .header-title { font-size: 24px; }
       .info-label {
         display: block;
         margin-bottom: 5px;
@@ -453,7 +448,6 @@ const htmlBody = `
 </head>
 <body>
   <div class="email-container">
-    <!-- Header con Logo de Texto -->
     <div class="header">
       <div class="logo-container">
         <div class="logo">
@@ -464,16 +458,14 @@ const htmlBody = `
       <h1 class="header-title">NUEVA CONSULTA RECIBIDA</h1>
       <p class="header-subtitle">AURA Platform</p>
       <div class="alert-badge">
-        <span> SISTEMA DE RECONEXIÓN HUMANA</span>
+        <span>⚡ SISTEMA DE RECONEXIÓN HUMANA</span>
       </div>
     </div>
     
-    <!-- Contenido Principal -->
     <div class="content">
-      <!-- Sección: Información del Contacto -->
       <div class="section">
         <div class="section-header">
-          <span class="section-icon"></span>
+          <span class="section-icon">👤</span>
           <h2 class="section-title">Información del Contacto</h2>
         </div>
         <div class="info-grid">
@@ -500,7 +492,6 @@ const htmlBody = `
         </div>
       </div>
       
-      <!-- Sección: Detalles de la Consulta -->
       <div class="section">
         <div class="section-header">
           <span class="section-icon">📋</span>
@@ -518,7 +509,6 @@ const htmlBody = `
         </div>
       </div>
       
-      <!-- Sección: Mensaje -->
       <div class="section">
         <div class="section-header">
           <span class="section-icon">💬</span>
@@ -530,13 +520,12 @@ const htmlBody = `
       </div>
     </div>
     
-    <!-- Footer -->
     <div class="footer">
       <div class="footer-logo">
         <div class="footer-logo-text">Innovación</div>
         <div class="footer-logo-brand">W.E.L.</div>
       </div>
-      <div class="footer-title"> SISTEMA AUTOMÁTICO AURA v2.0</div>
+      <div class="footer-title">⚡ SISTEMA AUTOMÁTICO AURA v2.0</div>
       <div class="footer-divider"></div>
       <p class="footer-text">
         Este correo fue generado automáticamente desde el<br/>
@@ -555,73 +544,49 @@ const htmlBody = `
   </div>
 </body>
 </html>
-`;
-    // Cuerpo del email en texto plano (fallback)
-    const textBody = `
-═══════════════════════════════════════
-NUEVA CONSULTA - AURA PLATFORM
-═══════════════════════════════════════
-
-ORIGEN: Formulario de Contacto Web
-SITIO: AURA - Reconexión Humana
-FECHA: ${submissionDate}
-
-───────────────────────────────────────
-DATOS DEL CONTACTO
-───────────────────────────────────────
-• Nombre Completo: ${name}
-• Email de Contacto: ${email}
-• Organización: ${company}
-• Teléfono: ${phoneText}
-
-───────────────────────────────────────
-INFORMACIÓN DE LA CONSULTA
-───────────────────────────────────────
-• Tipo de Consulta: ${categoryLabel}
-• Nivel de Prioridad: ${urgencyLabel}
-• Estado: Nueva consulta pendiente de respuesta
-
-───────────────────────────────────────
-MENSAJE COMPLETO
-───────────────────────────────────────
-${message}
-
-═══════════════════════════════════════
-SISTEMA AUTOMÁTICO AURA v2.0
-═══════════════════════════════════════
-Este email fue generado automáticamente desde
-el formulario de contacto de AURA Platform.
-
-Para responder, utiliza directamente el email:
-${email}
     `;
 
-    // Configurar opciones del email
-    const mailOptions = {
-      from: `"AURA Platform" <${process.env.MAIL_USERNAME}>`,
-      to: DESTINATION_EMAIL,
-      replyTo: email,
-      subject: subject,
-      text: textBody,
-      html: htmlBody
-    };
-
-    // Enviar email
-    const info = await transporter.sendMail(mailOptions);
+    // ═══════════════════════════════════════
+    // ENVIAR EMAIL CON RESEND
+    // ═══════════════════════════════════════
+    console.log('📧 Enviando email a:', DESTINATION_EMAIL);
     
+    const { data, error } = await resend.emails.send({
+      from: 'AURA Platform <onboarding@resend.dev>',
+      to: [DESTINATION_EMAIL],
+      reply_to: email,
+      subject: subject,
+      html: htmlBody,
+    });
+
+    // Manejo de errores de Resend
+    if (error) {
+      console.error('═══════════════════════════════════════');
+      console.error('❌ ERROR DE RESEND');
+      console.error('Error completo:', JSON.stringify(error, null, 2));
+      console.error('═══════════════════════════════════════');
+      
+      return res.status(500).json({
+        success: false,
+        error: 'Error al enviar el correo mediante Resend',
+        details: process.env.NODE_ENV === 'development' ? error : undefined
+      });
+    }
+
+    // Logs de éxito
     console.log('═══════════════════════════════════════');
-    console.log(' EMAIL ENVIADO EXITOSAMENTE');
+    console.log('✅ EMAIL ENVIADO EXITOSAMENTE');
     console.log('═══════════════════════════════════════');
-    console.log(' Destinatario:', DESTINATION_EMAIL);
-    console.log(' Remitente:', name);
-    console.log(' Email remitente:', email);
-    console.log(' Organización:', company);
-    console.log(' Categoría:', categoryLabel);
-    console.log(' Prioridad:', urgencyLabel);
-    console.log(' Message ID:', info.messageId);
+    console.log('📧 Destinatario:', DESTINATION_EMAIL);
+    console.log('👤 Remitente:', name);
+    console.log('📬 Email:', email);
+    console.log('🏢 Organización:', company);
+    console.log('📋 Categoría:', categoryLabel);
+    console.log('⚡ Prioridad:', urgencyLabel);
+    console.log('🆔 Email ID:', data?.id || 'N/A');
     console.log('═══════════════════════════════════════');
 
-    // Respuesta exitosa
+    // Respuesta exitosa al cliente
     res.status(200).json({
       success: true,
       message: 'Consulta enviada exitosamente',
@@ -631,13 +596,13 @@ ${email}
         company,
         category: categoryLabel,
         urgency: urgencyLabel,
-        messageId: info.messageId
+        emailId: data?.id
       }
     });
 
   } catch (error) {
     console.error('═══════════════════════════════════════');
-    console.error(' ERROR AL ENVIAR EMAIL');
+    console.error('❌ ERROR NO CONTROLADO');
     console.error('═══════════════════════════════════════');
     console.error('Error:', error.message);
     console.error('Stack:', error.stack);
@@ -645,41 +610,52 @@ ${email}
     
     res.status(500).json({
       success: false,
-      error: 'Error al enviar el correo. Por favor, intenta nuevamente.',
+      error: 'Error interno al procesar la solicitud',
       details: process.env.NODE_ENV === 'development' ? error.message : undefined
     });
   }
 });
 
-// Endpoint de salud
+// ═══════════════════════════════════════
+// ENDPOINT: HEALTH CHECK
+// ═══════════════════════════════════════
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     status: 'healthy',
     service: 'AURA Contact API',
     version: '2.0',
+    provider: 'Resend',
     timestamp: new Date().toISOString(),
-    emailConfigured: !!process.env.MAIL_USERNAME && !!process.env.MAIL_PASSWORD
+    emailConfigured: emailConfigured,
+    environment: process.env.NODE_ENV || 'development'
   });
 });
 
-// Ruta raíz
+// ═══════════════════════════════════════
+// ENDPOINT: ROOT
+// ═══════════════════════════════════════
 app.get('/', (req, res) => {
   res.json({
     message: '🌟 AURA Contact API v2.0',
     description: 'API para el formulario de contacto de AURA Platform',
+    provider: 'Resend Email Service',
     endpoints: {
-      health: 'GET /api/health - Verificar estado del servidor',
+      root: 'GET / - Información de la API',
+      health: 'GET /api/health - Estado del servidor',
       contact: 'POST /api/contact - Enviar consulta por email'
     },
-    documentation: 'Consulta el README.md para más información'
+    status: emailConfigured ? 'Operacional ✅' : 'Configuración pendiente ⚠️'
   });
 });
 
-// Middleware para rutas no encontradas
+// ═══════════════════════════════════════
+// MIDDLEWARE: 404 NOT FOUND
+// ═══════════════════════════════════════
 app.use((req, res) => {
   res.status(404).json({
     success: false,
     error: 'Ruta no encontrada',
+    requestedPath: req.path,
     availableEndpoints: [
       'GET /',
       'GET /api/health',
@@ -688,35 +664,49 @@ app.use((req, res) => {
   });
 });
 
-// Middleware para manejo de errores
+// ═══════════════════════════════════════
+// MIDDLEWARE: ERROR HANDLER
+// ═══════════════════════════════════════
 app.use((err, req, res, next) => {
-  console.error('Error no capturado:', err);
+  console.error('═══════════════════════════════════════');
+  console.error('❌ ERROR NO CAPTURADO');
+  console.error('═══════════════════════════════════════');
+  console.error('Error:', err.message);
+  console.error('Stack:', err.stack);
+  console.error('═══════════════════════════════════════');
+  
   res.status(500).json({
     success: false,
-    error: 'Error interno del servidor'
+    error: 'Error interno del servidor',
+    details: process.env.NODE_ENV === 'development' ? err.message : undefined
   });
 });
 
-// Iniciar servidor
+// ═══════════════════════════════════════
+// INICIAR SERVIDOR
+// ═══════════════════════════════════════
 app.listen(PORT, () => {
+  console.log('');
   console.log('═══════════════════════════════════════');
-  console.log(' AURA CONTACT API v2.0');
+  console.log('🚀 AURA CONTACT API v2.0 - RESEND');
   console.log('═══════════════════════════════════════');
-  console.log(` Servidor iniciado exitosamente`);
-  console.log(` Puerto: ${PORT}`);
-  console.log(` URL Local: http://localhost:${PORT}`);
-  console.log(` Emails enviados a: ${DESTINATION_EMAIL}`);
-  console.log(` Entorno: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`✅ Servidor iniciado exitosamente`);
+  console.log(`🌐 Puerto: ${PORT}`);
+  console.log(`📍 URL: http://localhost:${PORT}`);
+  console.log(`📧 Emails a: ${DESTINATION_EMAIL}`);
+  console.log(`🔧 Entorno: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🔑 Resend: ${emailConfigured ? '✅ Configurado' : '⚠️ NO configurado'}`);
   console.log('═══════════════════════════════════════');
-  console.log(' Endpoints disponibles:');
+  console.log('📡 Endpoints disponibles:');
   console.log(`   GET  http://localhost:${PORT}/`);
   console.log(`   GET  http://localhost:${PORT}/api/health`);
   console.log(`   POST http://localhost:${PORT}/api/contact`);
   console.log('═══════════════════════════════════════');
-  
-  if (!process.env.MAIL_USERNAME || !process.env.MAIL_PASSWORD) {
-    console.log('  ADVERTENCIA: Variables de entorno de email no configuradas');
-    console.log('   Configura MAIL_USERNAME y MAIL_PASSWORD en tu archivo .env');
-    console.log('═══════════════════════════════════════');
-  }
+  console.log('');
+  console.log('⚠️  MODO PRUEBA DE RESEND ACTIVO');
+  console.log(`   Los emails solo se envían a: ${DESTINATION_EMAIL}`);
+  console.log('   Para enviar a otros correos, verifica tu dominio en:');
+  console.log('   https://resend.com/domains');
+  console.log('═══════════════════════════════════════');
+  console.log('');
 });
